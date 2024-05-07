@@ -10,29 +10,68 @@ from scipy.ndimage import zoom
 tf.disable_v2_behavior()
 
 
+import logging  
+# logging.getLogger('tensorflow').setLevel(logging.ERROR)
+
+
+logging.basicConfig(level=logging.INFO)
+
 class auto_encoder(object):
-    def __init__(self, sess):
+    def __init__(self, sess, phase='train'):
         self.sess           = sess
-        self.phase          = 'train'
+        self.phase          = phase
+        
         self.batch_size     = 1
-        self.inputI_size    = 128
+        self.input_size = (512, 256, 256)
+        # self.input_size = (128, 128, 128)
+        # self.input_size = (256, 256, 256) # YUBRJA fixed *
+        self.inputI_size    = 256
         self.inputI_chn     = 1
         self.output_chn     = 12
+
         self.lr             = 0.0001
         self.beta1          = 0.3
         self.epoch          = 500
-        self.model_name     = 'n1.model'
-        self.save_intval    = 20
+        self.model_name     = 'n2.model'
+        self.save_intval    = 10
+
+        self.code_test = True
+
         self.build_model()
-        self.chkpoint_dir   = "./ckpt"
-        self.train_data_dir = "./real_train/incomplete/"
-        self.train_label_dir = "./real_train/complete"
-        self.test_data_dir = "./real_test/incomplete"
+        self.chkpoint_dir   = f"/scratch/railabs/yb107/genPhantom/MSN_Training_Data/checkpoints/{self.model_name}/"
+        # self.chkpoint_dir = "/home/yb107/cvit-work/genPhantom/medshapenet-feedback/benchmark_dataset/ckpt"
+        self.train_data_dir = "/scratch/railabs/yb107/genPhantom/MSN_Training_Data/train/incomplete/" 
+        self.train_label_dir = "/scratch/railabs/yb107/genPhantom/MSN_Training_Data/train/complete/"
 
-        self.test_label_dir="./Dtest4/dataset/0_ground_truth/lung/"
-        self.save_output_dir = "./output_multiclass/"
-        self.save_residual_dir = "./output_multiclass/residual/"
+        self.valid_data_dir = "/scratch/railabs/yb107/genPhantom/MSN_Training_Data/validation/incomplete/"
+        self.valid_label_dir = "/scratch/railabs/yb107/genPhantom/MSN_Training_Data/validation/complete/"
+ 
+        # self.test_label_dir="./Dtest4/dataset/0_ground_truth/lung/"
+        self.test_data_dir = "/scratch/railabs/yb107/genPhantom/MSN_Training_Data/test/incomplete/" # YUBRJA fixed *
+        # self.test_data_dir = "/scratch/railabs/yb107/genPhantom/MSN_Training_Data/test_one_case/incomplete/" # YUBRJA fixed *
+        self.test_label_dir="/scratch/railabs/yb107/genPhantom/MSN_Training_Data/test/complete/"
+        # self.test_label_dir="/scratch/railabs/yb107/genPhantom/MSN_Training_Data/test_one_case/complete/"
+        
+        self.curr_epoch = -1
 
+        self.ckpt_name = 'ckpt'
+
+        if self.code_test:
+            self.epoch = 3
+            self.save_intval = 1
+
+
+
+    @property
+    def save_output_dir(self):
+        if self.phase == 'train':
+            return f"/scratch/railabs/yb107/genPhantom/MSN_Training_Data/inferences/{self.model_name}/epoch_{self.curr_epoch}/output_multiclass/"
+        # return f"/scratch/railabs/yb107/genPhantom/MSN_Training_Data/test_one_case/inferences/{self.ckpt_name}/output_multiclass/"
+        return f"/scratch/railabs/yb107/genPhantom/MSN_Training_Data/inferences/{self.ckpt_name}/output_multiclass/"
+        
+    @property
+    def save_residual_dir(self):
+        return self.save_output_dir + "residuals/"
 
     def dice_loss_fun(self, pred, input_gt):
         input_gt = tf.one_hot(input_gt, 12)
@@ -80,9 +119,13 @@ class auto_encoder(object):
 
 
     def build_model(self):
-        print('building patch based model...')       
-        self.input_I = tf.placeholder(dtype=tf.float32, shape=[self.batch_size,self.inputI_size,self.inputI_size,128, self.inputI_chn], name='inputI')
-        self.input_gt = tf.placeholder(dtype=tf.int64, shape=[self.batch_size,self.inputI_size,self.inputI_size,128,1], name='target')
+        logging.info('building patch based model...')       
+        # self.input_I = tf.placeholder(dtype=tf.float32, shape=[self.batch_size,self.inputI_size,self.inputI_size,128, self.inputI_chn], name='inputI')
+        # self.input_gt = tf.placeholder(dtype=tf.int64, shape=[self.batch_size,self.inputI_size,self.inputI_size,128,1], name='target')
+        
+        self.input_I = tf.placeholder(dtype=tf.float32, shape=[self.batch_size, self.input_size[0], self.input_size[1],self.input_size[2], self.inputI_chn], name='inputI')
+        self.input_gt = tf.placeholder(dtype=tf.int64, shape=[self.batch_size,self.input_size[0], self.input_size[1],self.input_size[2],1], name='target')
+
         self.soft_prob , self.task0_label = self.encoder_decoder(self.input_I)
         self.main_dice_loss = self.dice_loss_fun(self.soft_prob, self.input_gt[:,:,:,:,0])
         self.dice_loss=200000000*self.main_dice_loss
@@ -127,91 +170,166 @@ class auto_encoder(object):
         counter=1
 
         train_label_list=glob('{}/*.nii.gz'.format(self.train_label_dir))
+        # train_label_list=os.listdir(self.train_label_dir)
 
-        i=0
-        for epoch in np.arange(self.epoch):
-            i=i+1
-            print('epoch:',i )
+        for epoch in np.arange(self.epoch):            
+            self.curr_epoch = epoch
+            logging.info("=========================")
+            logging.info(f'epoch:{epoch}' )
+
+            if self.code_test:
+                logging.info(f"Code Testing Mode: {self.code_test}")
+
+                train_label_list = train_label_list[:10]
+
             for j in range(len(train_label_list)):
                 labelImg=sitk.ReadImage(train_label_list[j])
                 labelNpy=sitk.GetArrayFromImage(labelImg)
-                labelNpy_resized=zoom(labelNpy,(128/labelNpy.shape[0],128/labelNpy.shape[1],128/labelNpy.shape[2]),order=0, mode='constant')
+                labelNpy_resized=zoom(labelNpy,(self.input_size[0]/labelNpy.shape[0],self.input_size[1]/labelNpy.shape[1],self.input_size[2]/labelNpy.shape[2]),order=0, mode='constant')
+                
                 labelNpy_resized=np.expand_dims(np.expand_dims(labelNpy_resized,axis=0),axis=4) 
-                name=train_label_list[j][-len('_full.nii.gz')-len('s0556'):-len('_full.nii.gz')]
-                for k in range(10):
-                    data_dir=self.train_data_dir+str(name)+'./'+str(name)+'_%d'%k+'.nii.gz'
+                # name=train_label_list[j][-len('_full.nii.gz')-len('s0556'):-len('_full.nii.gz')] # Name is just s0556
+                
+                
+                name = train_label_list[j].replace('.nii.gz', '').split('/')[-1]
+                
+
+                # for k in range(10):
+                files =glob(f"{self.train_data_dir}{name}/*")
+                
+                for data_dir in files:
+                    logging.info(f"Training file: {data_dir}")
+                        
+                    # data_dir=self.train_data_dir+str(name)+'/'+str(name)+'_%d'%k+'.nii.gz' # Changed a . 
                     trainImg=sitk.ReadImage(data_dir)
                     trainNpy=sitk.GetArrayFromImage(trainImg)
-                    trainNpy_resized=zoom(trainNpy,(128/trainNpy.shape[0],128/trainNpy.shape[1],128/trainNpy.shape[2]),order=0, mode='constant')
+                    
+                    trainNpy_resized=zoom(trainNpy,(self.input_size[0]/trainNpy.shape[0],self.input_size[1]/trainNpy.shape[1],self.input_size[2]/trainNpy.shape[2]),order=0, mode='constant')
                     trainNpy_resized=np.expand_dims(np.expand_dims(trainNpy_resized,axis=0),axis=4) 
+                    
+                    logging.info(f"TrainNpy Shape: {trainNpy_resized.shape}")
+
                     _, cur_train_loss = self.sess.run([u_optimizer, self.Loss], feed_dict={self.input_I: trainNpy_resized, self.input_gt: labelNpy_resized})
+
                     train_output0 = self.sess.run(self.task0_label, feed_dict={self.input_I: trainNpy_resized})
-                    print('sum for current training whole: %.8f, pred whole:  %.8f'%(np.sum(labelNpy_resized),np.sum(train_output0)))        
-                    print('current training loss:',cur_train_loss)
+                    
+                    logging.info('sum for current training whole: %.8f, pred whole:  %.8f'%(np.sum(labelNpy_resized),np.sum(train_output0)))        
+                logging.info(f'current training loss:{cur_train_loss}')
+           
             counter+=1
             if np.mod(counter, self.save_intval) == 0:
                 self.save_chkpoint(self.chkpoint_dir, self.model_name, counter)
+                self.valid()
 
         self.save_chkpoint(self.chkpoint_dir, self.model_name, counter)
+
+    def valid(self):
+        valid_label_list=glob('{}/*.nii.gz'.format(self.valid_label_dir))
+        
+        if self.code_test:
+            valid_label_list = valid_label_list[:10]
+
+        total_valid_loss=0
+        for j in range(len(valid_label_list)):
+            labelImg=sitk.ReadImage(valid_label_list[j])
+            labelNpy=sitk.GetArrayFromImage(labelImg)
+            labelNpy_resized=zoom(labelNpy,(self.input_size[0]/labelNpy.shape[0],self.input_size[1]/labelNpy.shape[1],self.input_size[2]/labelNpy.shape[2]),order=0, mode='constant')
+            labelNpy_resized=np.expand_dims(np.expand_dims(labelNpy_resized,axis=0),axis=4) 
+            
+            name = valid_label_list[j].replace('.nii.gz', '').split('/')[-1]
+            
+            files =glob(f"{self.valid_data_dir}{name}/*")
+            valid_loss =0 
+            
+            for data_dir in files:
+                
+                validImg=sitk.ReadImage(data_dir)
+                validNpy=sitk.GetArrayFromImage(validImg)
+                validNpy_resized=zoom(validNpy,(self.input_size[0]/validNpy.shape[0],self.input_size[1]/validNpy.shape[1],self.input_size[2]/validNpy.shape[2]),order=0, mode='constant')
+                validNpy_resized=np.expand_dims(np.expand_dims(validNpy_resized,axis=0),axis=4) 
+                
+                cur_valid_loss = self.sess.run(self.Loss, feed_dict={self.input_I: validNpy_resized, self.input_gt: labelNpy_resized})
+                # valid_output0 = self.sess.run(self.task0_label, feed_dict={self.input_I: validNpy_resized})
+                # logging.info('sum for current validation whole: %.8f, pred whole:  %.8f'%(np.sum(labelNpy_resized),np.sum(valid_output0)))        
+                valid_loss+=cur_valid_loss
+            
+            logging.info(f'current validation loss for {os.path.basename(valid_label_list[j])} :{valid_loss/len(files)}')
+            
+            total_valid_loss+= valid_loss/len(files)
+        
+        logging.info(f'Total Average validation loss for Epoch {self.curr_epoch} :{total_valid_loss/len(valid_label_list)}')
 
 
     def test(self):
         init_op = tf.global_variables_initializer()
         self.sess.run(init_op)
+
         if self.load_chkpoint(self.chkpoint_dir):
-            print(" *****Successfully load the checkpoint**********")
+            logging.info(" *****Successfully load the checkpoint**********")
         else:
-            print("*******Fail to load the checkpoint***************")
+            logging.info("*******Fail to load the checkpoint***************")
+        
+        test_list=glob('{}/*/*.nii.gz'.format(self.test_data_dir))
 
-        test_list=glob('{}/*.nii.gz'.format(self.test_data_dir))
+        if self.code_test:
+            test_list = test_list[:10]
 
-        k=1
         for i in range(len(test_list)):
 
-            ### input 
-            print(test_list[i])                    
+            ### input                  
             test_img=sitk.ReadImage(test_list[i])
             test_input = sitk.GetArrayFromImage(test_img)
-            test_input_resized_ = zoom(test_input,(256/test_input.shape[0],256/test_input.shape[1],128/test_input.shape[2]),order=0, mode='constant')
+            # test_input_resized_ = zoom(test_input,(256/test_input.shape[0],256/test_input.shape[1],128/test_input.shape[2]),order=0, mode='constant')
+            test_input_resized_ = zoom(test_input,(self.input_size[0]/test_input.shape[0],self.input_size[1]/test_input.shape[1],self.input_size[2]/test_input.shape[2]),order=0, mode='constant') # Yubraj: fixed 256 
+            # logging.info(f"Test Input: {test_input.shape}")
             test_input_resized_[test_input_resized_>12]=0
             test_input_resized_[test_input_resized_<0]=0
-            print('test_input_resized_',np.unique(test_input_resized_))
+            # logging.info(f'test_input_resized_ {np.unique(test_input_resized_)}')
             test_input_resized=np.expand_dims(np.expand_dims(test_input_resized_,axis=0),axis=4)
 
 
             ## prediction
             test_output = self.sess.run(self.task0_label, feed_dict={self.input_I: test_input_resized})
-            print(test_output.shape)
-            print(np.unique(test_output))
+            # logging.info(f'Output Shape: {test_output.shape}')
+            # logging.info(f'Predicted Unique: {np.unique(test_output)}')
 
 
             ## output
-            filename=self.save_output_dir+test_list[i][-7-len('s0332_0'):-7]+'.nii.gz'
+            os.makedirs(self.save_output_dir, exist_ok=True)
+            os.makedirs(self.save_residual_dir, exist_ok=True)
+
+            # filename=self.save_output_dir+test_list[i][-7-len('s0332_0'):-7]+'.nii.gz'
+            filename=self.save_output_dir + os.path.basename(test_list[i])
             resize2original=1
 
             if resize2original:
-                print('resizing predictions...')
-
-                test_output=zoom(test_output[0],(test_input.shape[0]/256,test_input.shape[1]/256,test_input.shape[2]/128),order=0, mode='constant')
-                print(test_output.shape)
+                # logging.info('resizing predictions...')
+                # logging.info(f"Test Output: {test_output}")
+                # test_output=zoom(test_output[0],(test_input.shape[0]/256,test_input.shape[1]/256,test_input.shape[2]/128),order=0, mode='constant')
+                # test_output=zoom(test_output[0],(test_input.shape[0]/128,test_input.shape[1]/128,test_input.shape[2]/128),order=0, mode='constant') # Yubraj: fixed 256
+                
+                test_output = test_output[0]
+                logging.info(test_output.shape)
 
                 test_output[test_output>12]=0
                 test_output[test_output<0]=0
                 test_pred=sitk.GetImageFromArray(test_output.astype('int32'))
-                test_pred.CopyInformation(test_img)
+                # test_pred.CopyInformation(test_img)
                 sitk.WriteImage(test_pred,filename)
 
             else:
-                print('resizing input...')
+                logging.info('resizing input...')
                 #test_img_downsampled=self.downsamplePatient(test_img,test_input.shape[0]/256,test_input.shape[1]/256,test_input.shape[2]/128)
-                print('resizing done...')
+                logging.info('resizing done...')
 
                 input_img = nibabel.load(test_list[i])
 
                 voxel_size=input_img.header.get_zooms()
-                voxel_size_new=[voxel_size[0]*(test_input.shape[0]/256),voxel_size[1]*(test_input.shape[1]/256),voxel_size[2]*(test_input.shape[2]/128)]
+                # voxel_size_new=[voxel_size[0]*(test_input.shape[0]/256),voxel_size[1]*(test_input.shape[1]/256),voxel_size[2]*(test_input.shape[2]/128)]
+                voxel_size_new=[voxel_size[0]*(test_input.shape[0]/self.input_size[0]),voxel_size[1]*(test_input.shape[1]/self.input_size[1]),voxel_size[2]*(test_input.shape[2]/self.input_size[2])]
                 resampled_img = nibabel.processing.resample_to_output(input_img, voxel_size_new)
-                filename_img=self.save_output_dir+test_list[i][-7-len('s0332_0'):-7]+'_org'+'.nii.gz'
+                # filename_img=self.save_output_dir+test_list[i][-7-len('s0332_0'):-7]+'_org'+'.nii.gz'
+                filename_img=self.save_output_dir + os.path.basename(test_list[i])
                 nibabel.save(resampled_img, filename_img)
 
 
@@ -219,7 +337,7 @@ class auto_encoder(object):
                 sitk.WriteImage(test_pred,filename)
 
 
-            k+=1
+            
             #filename_res=self.save_residual_dir+test_list[i][-7-len('s0332_0'):-7]+'.nii.gz'
             #res_output=test_output-test_input
             #res_output_img=sitk.GetImageFromArray(res_output.astype('int32'))
@@ -229,26 +347,29 @@ class auto_encoder(object):
 
 
     def save_chkpoint(self, checkpoint_dir, model_name, step):
-        model_dir = "%s" % ('ckpt')
-        checkpoint_dir = os.path.join(checkpoint_dir, model_dir)
-        if not os.path.exists(checkpoint_dir):
-            os.makedirs(checkpoint_dir)
+        logging.info(" [*] Saving checkpoint to {}...".format(checkpoint_dir))
+        os.makedirs(checkpoint_dir, exist_ok=True)
         self.saver.save(self.sess, os.path.join(checkpoint_dir, model_name), global_step=step)
 
 
 
     def load_chkpoint(self, checkpoint_dir):
-        print(" [*] Reading checkpoint...")
-        model_dir = "%s" % ('ckpt')
-        print('########################################################')
-        checkpoint_dir = os.path.join(checkpoint_dir, model_dir)
+        logging.info(" [*] Reading checkpoint...")
+        logging.info('########################################################')
         ckpt = tf.train.get_checkpoint_state(checkpoint_dir)
         if ckpt and ckpt.model_checkpoint_path:
             ckpt_name = os.path.basename(ckpt.model_checkpoint_path)
+            self.ckpt_name = ckpt_name
+            logging.info('##############ckpt_name:{}'.format(ckpt_name))
             self.saver.restore(self.sess, os.path.join(checkpoint_dir, ckpt_name))
             return True
         else:
             return False
+
+
+
+
+
 
 
 if __name__ == "__main__":
@@ -259,7 +380,7 @@ if __name__ == "__main__":
     sess1 = tf.compat.v1.Session()
     with sess1.as_default():
         with sess1.graph.as_default():
-            model = auto_encoder(sess1)
+            model = auto_encoder(sess1, phase=args.phase)
             total_parameters = 0
             for variable in tf.trainable_variables():
                 shape = variable.get_shape()
@@ -267,11 +388,11 @@ if __name__ == "__main__":
                 for dim in shape:
                     variable_parameters *= dim.value
                 total_parameters += variable_parameters
-            print('trainable params:',total_parameters)
+            logging.info(f'trainable params:{total_parameters}')
 
     if args.phase == "train":
-        print('training model...')
+        logging.info('training model...')
         model.train()
     if args.phase == "test":
-        print('testing model...')
+        logging.info('testing model...')
         model.test()
