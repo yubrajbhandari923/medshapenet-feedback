@@ -22,8 +22,8 @@ class auto_encoder(object):
         self.phase          = phase
         
         self.batch_size     = 1
-        self.input_size = (512, 256, 256)
-        # self.input_size = (128, 128, 128)
+        # self.input_size = (512, 256, 256)
+        self.input_size = (128, 128, 128)
         # self.input_size = (256, 256, 256) # YUBRJA fixed *
         self.inputI_size    = 256
         self.inputI_chn     = 1
@@ -128,9 +128,13 @@ class auto_encoder(object):
 
         self.soft_prob , self.task0_label = self.encoder_decoder(self.input_I)
         self.main_dice_loss = self.dice_loss_fun(self.soft_prob, self.input_gt[:,:,:,:,0])
+        logging.info(f"Main Dice Loss: {self.main_dice_loss.numpy()}")
         self.dice_loss=200000000*self.main_dice_loss
         self.Loss = self.dice_loss
+        logging.info(f"Loss: {self.Loss.numpy()}")
         self.saver = tf.train.Saver()
+        exit()
+
 
 
     def encoder_decoder(self, inputI):
@@ -160,7 +164,7 @@ class auto_encoder(object):
         pred_prob3 = self.conv3d(input=pred_prob2, output_chn=self.output_chn, kernel_size=3, stride=1, use_bias=True, name='pred_prob3')
         soft_prob=tf.nn.softmax(pred_prob3,name='task_0')
         task0_label=tf.argmax(soft_prob,axis=4,name='argmax0')
-        return  soft_prob,task0_label
+        return  soft_prob, task0_label
 
 
     def train(self):
