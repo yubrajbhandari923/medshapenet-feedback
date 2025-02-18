@@ -101,8 +101,9 @@ class auto_encoder(object):
 
     def Deconv3d(self,input, output_chn, name):
         batch, in_depth, in_height, in_width, in_channels = [int(d) for d in input.get_shape()]
-        filter = tf.get_variable(name+"/filter", shape=[4, 4, 4, output_chn, in_channels], dtype=tf.float32,
-                                 initializer=tf.random_normal_initializer(0, 0.01))
+        # filter = tf.get_variable(name+"/filter", shape=[4, 4, 4, output_chn, in_channels], dtype=tf.float32,
+                                #  initializer=tf.random_normal_initializer(0, 0.01))
+        filter = None
         conv = tf.nn.conv3d_transpose(value=input, filter=filter, output_shape=[batch, in_depth * 2, in_height * 2, in_width * 2, output_chn],
                                       strides=[1, 2, 2, 2, 1], padding="SAME", name=name)
         return conv
